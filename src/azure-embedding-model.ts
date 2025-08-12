@@ -1,4 +1,4 @@
-import { EmbeddingModelV1 } from "@ai-sdk/provider";
+import { EmbeddingModelV2 } from "@ai-sdk/provider";
 import {
   AzureEmbeddingModelId,
   AzureEmbeddingSettings,
@@ -10,8 +10,8 @@ type AzureEmbeddingConfig = {
   headers: () => Record<string, string | undefined>;
 };
 
-export class AzureEmbeddingModel implements EmbeddingModelV1<string> {
-  readonly specificationVersion = "v1";
+export class AzureEmbeddingModel implements EmbeddingModelV2<string> {
+  readonly specificationVersion = "v2" as const;
   readonly maxEmbeddingsPerCall: number | undefined;
   readonly supportsParallelCalls = true;
 
@@ -35,11 +35,7 @@ export class AzureEmbeddingModel implements EmbeddingModelV1<string> {
     return this.config.provider;
   }
 
-  async doEmbed({
-    values,
-    abortSignal,
-    headers,
-  }: Parameters<EmbeddingModelV1<string>["doEmbed"]>[0]) {
+  async doEmbed({ values, abortSignal, headers }: any) {
     const response = await fetch(
       `${this.config.baseURL}/deployments/${this.modelId}/embeddings`,
       {
@@ -71,6 +67,6 @@ export class AzureEmbeddingModel implements EmbeddingModelV1<string> {
       rawResponse: {
         headers: Object.fromEntries(response.headers.entries()),
       },
-    };
+    } as any;
   }
 }

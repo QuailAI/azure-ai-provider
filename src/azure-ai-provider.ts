@@ -1,7 +1,7 @@
 import {
-  EmbeddingModelV1,
-  LanguageModelV1,
-  ProviderV1,
+  EmbeddingModelV2,
+  LanguageModelV2,
+  ProviderV2,
 } from "@ai-sdk/provider";
 import { loadApiKey, withoutTrailingSlash } from "@ai-sdk/provider-utils";
 import { AzureChatLanguageModel } from "./azure-ai-language-model";
@@ -12,8 +12,8 @@ import {
   AzureEmbeddingSettings,
 } from "./azure-embedding-settings";
 
-export interface AzureProvider extends ProviderV1 {
-  (modelId: AzureChatModelId, settings?: AzureChatSettings): LanguageModelV1;
+export interface AzureProvider extends ProviderV2 {
+  (modelId: AzureChatModelId, settings?: AzureChatSettings): LanguageModelV2;
 
   /**
    * Creates a model for text generation.
@@ -21,7 +21,7 @@ export interface AzureProvider extends ProviderV1 {
   languageModel(
     modelId: AzureChatModelId,
     settings?: AzureChatSettings
-  ): LanguageModelV1;
+  ): LanguageModelV2;
 
   /**
    * Creates a model for text generation.
@@ -29,7 +29,7 @@ export interface AzureProvider extends ProviderV1 {
   chat(
     modelId: AzureChatModelId,
     settings?: AzureChatSettings
-  ): LanguageModelV1;
+  ): LanguageModelV2;
 
   /**
    * @deprecated Use `textEmbeddingModel()` instead.
@@ -37,7 +37,7 @@ export interface AzureProvider extends ProviderV1 {
   embedding(
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ): EmbeddingModelV1<string>;
+  ): EmbeddingModelV2<string>;
 
   /**
    * @deprecated Use `textEmbeddingModel()` instead.
@@ -45,12 +45,12 @@ export interface AzureProvider extends ProviderV1 {
   textEmbedding(
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ): EmbeddingModelV1<string>;
+  ): EmbeddingModelV2<string>;
 
   textEmbeddingModel: (
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ) => EmbeddingModelV1<string>;
+  ) => EmbeddingModelV2<string>;
 }
 
 export interface AzureProviderSettings {
@@ -131,6 +131,9 @@ export function createAzure(
   provider.embedding = createEmbeddingModel;
   provider.textEmbedding = createEmbeddingModel;
   provider.textEmbeddingModel = createEmbeddingModel;
+  provider.imageModel = function imageModel() {
+    throw new Error("Image model is not implemented for Azure provider.");
+  } as AzureProvider["imageModel"]; // satisfy ProviderV2 interface
 
   return provider;
 }

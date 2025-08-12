@@ -1,7 +1,13 @@
-import { LanguageModelV1FinishReason } from "@ai-sdk/provider";
 export function mapAzureFinishReason(
   finishReason: string | null | undefined
-): LanguageModelV1FinishReason {
+):
+  | "stop"
+  | "length"
+  | "tool-calls"
+  | "content-filter"
+  | "error"
+  | "other"
+  | "unknown" {
   switch (finishReason) {
     case "stop":
       return "stop";
@@ -10,6 +16,10 @@ export function mapAzureFinishReason(
       return "length";
     case "tool_calls":
       return "tool-calls";
+    case "content_filter":
+      return "content-filter";
+    case "error":
+      return "error";
     default:
       return "unknown";
   }

@@ -1,7 +1,12 @@
-import { LanguageModelV1Prompt } from "@ai-sdk/provider";
+// V2 tests: no direct type imports required
 import { createAzure } from "./azure-ai-provider";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { config } from "dotenv";
+import type {
+  LanguageModelV2Prompt,
+  LanguageModelV2FunctionTool,
+  LanguageModelV2Text,
+} from "@ai-sdk/provider";
 
 config();
 
@@ -31,7 +36,7 @@ describe("AzureChatLanguageModel", () => {
     },
   };
 
-  const testPrompt: LanguageModelV1Prompt = [
+  const testPrompt: LanguageModelV2Prompt = [
     { role: "user", content: [{ type: "text", text: "Say hello" }] },
   ];
 
@@ -46,13 +51,14 @@ describe("AzureChatLanguageModel", () => {
       const model = provider.languageModel("Llama-3.3-70B-Instruct");
       const result = await model.doGenerate({
         prompt: testPrompt,
-        inputFormat: "prompt",
-        mode: {
-          type: "regular",
-        },
+        temperature: 0,
+        maxOutputTokens: 64,
       });
 
-      expect(result.text).toBeTruthy();
+      const text = result.content.find(
+        (c): c is LanguageModelV2Text => c.type === "text"
+      )?.text;
+      expect(text).toBeTruthy();
       expect(result.usage).toBeDefined();
       expect(result.finishReason).toBeDefined();
       console.log(result);
@@ -70,20 +76,17 @@ describe("AzureChatLanguageModel", () => {
       const model = provider.languageModel("Llama-3.3-70B-Instruct");
       const stream = await model.doStream({
         prompt: testPrompt,
-        inputFormat: "prompt",
-        mode: {
-          type: "regular",
-        },
+        temperature: 0,
+        maxOutputTokens: 64,
       });
 
       const chunks: string[] = [];
       for await (const chunk of stream.stream) {
         if (chunk.type === "text-delta") {
-          chunks.push(chunk.textDelta);
+          chunks.push(chunk.delta);
         }
       }
 
-      expect(chunks.length).toBeGreaterThan(0);
       expect(chunks.join("")).toBeTruthy();
       console.log(chunks.join(""));
     }
@@ -96,26 +99,30 @@ describe("AzureChatLanguageModel", () => {
     });
 
     const model = provider.languageModel("Llama-3.3-70B-Instruct");
+    const tools: LanguageModelV2FunctionTool[] = [
+      {
+        type: "function",
+        name: "getCurrentTime",
+        description: "Get the current time",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+    ];
+
     const result = await model.doGenerate({
       prompt: testPrompt,
-      inputFormat: "prompt",
-      mode: {
-        type: "regular",
-        tools: [
-          {
-            type: "function",
-            name: "getCurrentTime",
-            description: "Get the current time",
-            parameters: {
-              type: "object",
-              properties: {},
-            },
-          },
-        ],
-      },
+      tools,
+      temperature: 0,
+      maxOutputTokens: 64,
     });
 
-    expect(result.text).toBeTruthy();
+    const text = result.content.find(
+      (c): c is LanguageModelV2Text => c.type === "text"
+    )?.text;
+    expect(text).toBeTruthy();
     expect(result.warnings).toBeDefined();
     console.log(result);
   });

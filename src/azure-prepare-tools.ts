@@ -1,62 +1,90 @@
 import {
-  LanguageModelV1,
-  LanguageModelV1CallWarning,
-  UnsupportedFunctionalityError,
+  LanguageModelV2CallWarning,
+  LanguageModelV2FunctionTool,
+  LanguageModelV2ProviderDefinedTool,
 } from "@ai-sdk/provider";
-import {
-  ChatCompletionsToolDefinition,
-  ChatCompletionsNamedToolChoice,
-} from "@azure-rest/ai-inference";
+import { ChatCompletionsToolDefinition } from "@azure-rest/ai-inference";
 
-export function prepareTools(
-  mode: Parameters<LanguageModelV1["doGenerate"]>[0]["mode"] & {
-    type: "regular";
-  }
+type ToolChoiceV2 =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "tool"; toolName: string };
+
+export function prepareToolsV2(
+  toolsInput:
+    | Array<LanguageModelV2FunctionTool | LanguageModelV2ProviderDefinedTool>
+    | undefined,
+  toolChoice:
+    | { type: "auto" }
+    | { type: "none" }
+    | { type: "required" }
+    | { type: "tool"; toolName: string }
+    | undefined
 ): {
   tools: ChatCompletionsToolDefinition[] | undefined;
-  tool_choice?: string | undefined;
-  toolWarnings: LanguageModelV1CallWarning[];
+  tool_choice?: string | { type: "function"; function: { name: string } };
+  toolWarnings: LanguageModelV2CallWarning[];
 } {
-  const tools = mode.tools?.length ? mode.tools : undefined;
-  const toolWarnings: LanguageModelV1CallWarning[] = [];
+  const toolWarnings: LanguageModelV2CallWarning[] = [];
 
-  if (tools == null) {
+  const tools = toolsInput?.length ? toolsInput : undefined;
+  if (!tools) {
     return { tools: undefined, tool_choice: undefined, toolWarnings };
   }
 
-  const azureTools = tools
-    .map((tool) => {
-      if (tool.type === "provider-defined") {
-        toolWarnings.push({ type: "unsupported-tool", tool });
-        return null;
-      }
+  const azureTools: ChatCompletionsToolDefinition[] = [];
+  for (const tool of tools) {
+    if (tool.type !== "function") {
+      toolWarnings.push({ type: "unsupported-tool", tool });
+      continue;
+    }
+    const fn = tool as LanguageModelV2FunctionTool;
+    azureTools.push({
+      type: "function",
+      function: {
+        name: fn.name,
+        description: fn.description ?? undefined,
+        parameters: fn.inputSchema,
+      },
+    });
+  }
 
-      // Ensure parameters match Azure's expected format
-      const parameters: {
-        type: "object";
-        properties: Record<string, unknown>;
-        required: string[];
-      } = {
-        type: "object",
-        properties: tool.parameters.properties || {},
-        required: tool.parameters.required || [],
-      };
-
-      return {
-        type: "function" as const,
-        function: {
-          name: tool.name,
-          description: tool.description ?? undefined,
-          parameters,
-        },
-      };
-    })
-    .filter((tool): tool is NonNullable<typeof tool> => tool !== null);
+  let tool_choice:
+    | string
+    | { type: "function"; function: { name: string } }
+    | undefined = undefined;
+  if (toolChoice?.type === "auto") {
+    tool_choice = "auto";
+  } else if (toolChoice?.type === "required") {
+    toolWarnings.push({
+      type: "unsupported-setting",
+      setting: "toolChoice",
+      details: "required toolChoice not supported",
+    });
+    tool_choice = "auto";
+  } else if (toolChoice?.type === "none") {
+    if (azureTools.length > 0) {
+      toolWarnings.push({
+        type: "unsupported-setting",
+        setting: "toolChoice",
+        details: "none toolChoice not supported when tools are provided",
+      });
+    }
+    // Prefer to omit tools downstream if none.
+  } else if (toolChoice?.type === "tool") {
+    tool_choice = {
+      type: "function",
+      function: { name: toolChoice.toolName },
+    };
+  }
 
   return {
-    tools: azureTools,
-    // Azure expects tool_choice to be a string
-    tool_choice: azureTools.length > 0 ? "auto" : undefined,
+    tools: azureTools.length ? azureTools : undefined,
+    tool_choice,
     toolWarnings,
   };
 }
+
+// Temporary alias to keep existing imports compiling during migration.
+export const prepareTools = prepareToolsV2;

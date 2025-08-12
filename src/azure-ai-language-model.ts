@@ -1,16 +1,14 @@
 import {
-  LanguageModelV1,
-  LanguageModelV1CallWarning,
-  LanguageModelV1FinishReason,
-  LanguageModelV1StreamPart,
-  LanguageModelV1FunctionToolCall,
+  LanguageModelV2,
+  LanguageModelV2CallOptions,
+  LanguageModelV2CallWarning,
+  LanguageModelV2StreamPart,
+  LanguageModelV2Content,
 } from "@ai-sdk/provider";
 import { AzureChatModelId, AzureChatSettings } from "./azure-ai-settings";
 import { mapAzureFinishReason } from "./map-azure-finish-reason";
 import { convertToAzureChatMessages } from "./convert-to-azure-messages";
-import { azureAIFailedResponseHandler } from "./azure-ai-errors";
-import { prepareTools } from "./azure-prepare-tools";
-import { getResponseMetadata } from "./get-response-metadata";
+import { prepareToolsV2 as prepareTools } from "./azure-prepare-tools";
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 import { createSseStream } from "@azure/core-sse";
@@ -21,9 +19,8 @@ type AzureChatConfig = {
   headers: () => Record<string, string | undefined>;
 };
 
-export class AzureChatLanguageModel implements LanguageModelV1 {
-  readonly specificationVersion = "v1";
-  readonly defaultObjectGenerationMode = "json";
+export class AzureChatLanguageModel implements LanguageModelV2 {
+  readonly specificationVersion = "v2" as const;
 
   readonly modelId: AzureChatModelId;
   readonly settings: AzureChatSettings;
@@ -53,87 +50,43 @@ export class AzureChatLanguageModel implements LanguageModelV1 {
   }
 
   private getArgs({
-    mode,
     prompt,
-    maxTokens,
     temperature,
-    topP,
-    topK,
-    frequencyPenalty,
-    presencePenalty,
+    maxOutputTokens,
     stopSequences,
-    responseFormat,
-    seed,
-  }: Parameters<LanguageModelV1["doGenerate"]>[0]) {
-    const type = mode.type;
-    const warnings: LanguageModelV1CallWarning[] = [];
-
-    if (topK != null) {
-      warnings.push({ type: "unsupported-setting", setting: "topK" });
-    }
+    tools,
+    toolChoice,
+  }: LanguageModelV2CallOptions) {
+    const warnings: LanguageModelV2CallWarning[] = [];
 
     const messages = convertToAzureChatMessages(prompt);
 
     const baseArgs = {
       messages,
       model: this.modelId,
-      max_tokens: maxTokens,
       temperature,
-      top_p: topP,
-      frequency_penalty: frequencyPenalty,
-      presence_penalty: presencePenalty,
+      max_tokens: maxOutputTokens,
       stop: stopSequences,
-      seed,
-      response_format:
-        responseFormat?.type === "json" ? { type: "json_object" } : undefined,
     };
 
-    switch (type) {
-      case "regular": {
-        const { tools, tool_choice, toolWarnings } = prepareTools(mode);
-        return {
-          args: {
-            ...baseArgs,
-            tools,
-            //ool_choice: "auto", // Always use "auto" when tools are present
-            temperature: temperature ?? 0, // Make the model more deterministic with tools
-          },
-          warnings: [...warnings, ...toolWarnings],
-        };
-      }
+    const {
+      tools: azureTools,
+      tool_choice,
+      toolWarnings,
+    } = prepareTools(tools, toolChoice);
 
-      case "object-json": {
-        return {
-          args: {
-            ...baseArgs,
-            response_format: { type: "json_object" },
-          },
-          warnings,
-        };
-      }
-
-      case "object-tool": {
-        return {
-          args: {
-            ...baseArgs,
-            //tool_choice: "any",
-
-            tools: [{ type: "function" as const, function: mode.tool }],
-          },
-          warnings,
-        };
-      }
-
-      default: {
-        const _exhaustiveCheck: never = type;
-        throw new Error(`Unsupported type: ${_exhaustiveCheck}`);
-      }
-    }
+    return {
+      args: {
+        ...baseArgs,
+        tools: azureTools,
+        tool_choice,
+        temperature: temperature ?? baseArgs.temperature,
+      },
+      warnings: [...warnings, ...toolWarnings],
+    };
   }
 
-  async doGenerate(
-    options: Parameters<LanguageModelV1["doGenerate"]>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV1["doGenerate"]>>> {
+  async doGenerate(options: LanguageModelV2CallOptions) {
     const { args, warnings } = this.getArgs(options);
 
     const response = await this.client.path("/chat/completions").post({
@@ -144,36 +97,37 @@ export class AzureChatLanguageModel implements LanguageModelV1 {
       throw response.body.error;
     }
 
-    const { messages: rawPrompt, ...rawSettings } = args;
     const choice = response.body.choices[0];
-    const text = choice.message.content ?? "";
-
-    return {
-      text,
-      toolCalls: choice.message.tool_calls?.map(
-        (toolCall): LanguageModelV1FunctionToolCall => ({
-          toolCallType: "function",
+    const content: LanguageModelV2Content[] = [];
+    if (choice.message.content) {
+      content.push({ type: "text", text: choice.message.content });
+    }
+    if (choice.message.tool_calls) {
+      for (const toolCall of choice.message.tool_calls) {
+        content.push({
+          type: "tool-call",
           toolCallId: toolCall.id,
           toolName: toolCall.function.name,
-          args: toolCall.function.arguments,
-        })
-      ),
+          input: toolCall.function.arguments,
+        });
+      }
+    }
+
+    return {
+      content,
       finishReason: mapAzureFinishReason(choice.finish_reason ?? "unknown"),
       usage: {
-        promptTokens: response.body.usage.prompt_tokens,
-        completionTokens: response.body.usage.completion_tokens,
+        inputTokens: response.body.usage?.prompt_tokens,
+        outputTokens: response.body.usage?.completion_tokens,
+        totalTokens: response.body.usage?.total_tokens,
       },
-      rawCall: { rawPrompt, rawSettings },
-      rawResponse: { headers: response.headers },
-      request: { body: JSON.stringify(args) },
-      response: getResponseMetadata(response.body),
+      request: { body: args },
+      response: { body: response.body },
       warnings,
     };
   }
 
-  async doStream(
-    options: Parameters<LanguageModelV1["doStream"]>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV1["doStream"]>>> {
+  async doStream(options: LanguageModelV2CallOptions) {
     const { args, warnings } = this.getArgs(options);
     const body = { ...args, stream: true };
 
@@ -188,26 +142,59 @@ export class AzureChatLanguageModel implements LanguageModelV1 {
       throw new Error(`Failed to get chat completions: ${response.status}`);
     }
 
-    const { messages: rawPrompt, ...rawSettings } = args;
-    const stream = createSseStream(response.body as any);
-    let finishReason: LanguageModelV1FinishReason = "unknown";
-    let usage = {
-      promptTokens: Number.NaN,
-      completionTokens: Number.NaN,
+    const stream = createSseStream(response.body);
+    let finishReason: ReturnType<typeof mapAzureFinishReason> = "unknown";
+    let usage: {
+      inputTokens: number | undefined;
+      outputTokens: number | undefined;
+      totalTokens: number | undefined;
+    } = {
+      inputTokens: undefined,
+      outputTokens: undefined,
+      totalTokens: undefined,
     };
 
-    const functionArray: Array<{
-      name: string;
-      arguments: string;
-      id: string;
-    }> = [];
+    const toolCalls = new Map<
+      string,
+      {
+        name: string;
+        input: string;
+        id: string;
+        hasStarted: boolean;
+      }
+    >();
+    let lastToolCallId: string | undefined;
 
     return {
       stream: stream.pipeThrough(
-        new TransformStream<{ data: string }, LanguageModelV1StreamPart>({
+        new TransformStream<{ data: string }, LanguageModelV2StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings });
+          },
           transform(chunk, controller) {
             if (chunk.data === "[DONE]") {
-              controller.enqueue({ type: "finish", finishReason, usage });
+              // Send any remaining tool calls as complete
+              for (const toolCall of toolCalls.values()) {
+                if (toolCall.hasStarted) {
+                  controller.enqueue({
+                    type: "tool-input-end",
+                    id: toolCall.id,
+                  });
+
+                  controller.enqueue({
+                    type: "tool-call",
+                    toolCallId: toolCall.id,
+                    toolName: toolCall.name,
+                    input: toolCall.input,
+                  });
+                }
+              }
+
+              controller.enqueue({
+                type: "finish",
+                finishReason,
+                usage,
+              });
               return;
             }
 
@@ -215,74 +202,86 @@ export class AzureChatLanguageModel implements LanguageModelV1 {
 
             if (data.usage) {
               usage = {
-                promptTokens: data.usage.prompt_tokens,
-                completionTokens: data.usage.completion_tokens,
+                inputTokens: data.usage.prompt_tokens,
+                outputTokens: data.usage.completion_tokens,
+                totalTokens: data.usage.total_tokens,
               };
             }
 
             const choice = data.choices?.[0];
-
             if (!choice) return;
 
-            // Handle tool calls in delta responses
             if (choice.delta?.tool_calls) {
               for (const toolCall of choice.delta.tool_calls) {
-                let index = functionArray.findIndex(
-                  (f) => f.id === toolCall.id
-                );
-
-                if (index === -1) {
-                  index = functionArray.length;
-                  functionArray.push({
-                    name: toolCall.function?.name || "",
-                    arguments: toolCall.function?.arguments || "",
-                    id: toolCall.id,
-                  });
-                } else if (toolCall.function?.arguments) {
-                  functionArray[index].arguments += toolCall.function.arguments;
-                } else if (toolCall.function?.name) {
-                  functionArray[index].name = toolCall.function.name;
+                const incomingId = toolCall.id;
+                if (incomingId) lastToolCallId = incomingId;
+                let toolCallId = incomingId ?? lastToolCallId;
+                if (!toolCallId) {
+                  toolCallId = `tool-${toolCalls.size + 1}`;
                 }
 
-                // If we have complete arguments, emit the tool call
-                if (
-                  functionArray[index].name &&
-                  functionArray[index].arguments
-                ) {
-                  try {
-                    controller.enqueue({
-                      type: "tool-call",
-                      toolCallType: "function",
-                      toolCallId: functionArray[index].id,
-                      toolName: functionArray[index].name,
-                      args: functionArray[index].arguments,
-                    });
-                  } catch (e) {
-                    console.error("Failed to parse tool call:", e);
-                  }
+                if (!toolCalls.has(toolCallId)) {
+                  toolCalls.set(toolCallId, {
+                    name: toolCall.function?.name || "",
+                    input: toolCall.function?.arguments || "",
+                    id: toolCallId,
+                    hasStarted: false,
+                  });
+                }
+
+                const existing = toolCalls.get(toolCallId)!;
+
+                if (toolCall.function?.name && !existing.hasStarted) {
+                  existing.name = toolCall.function.name;
+                  existing.hasStarted = true;
+
+                  controller.enqueue({
+                    type: "tool-input-start",
+                    id: toolCallId,
+                    toolName: toolCall.function.name,
+                  });
+                }
+
+                if (toolCall.function?.arguments) {
+                  existing.input += toolCall.function.arguments;
+
+                  controller.enqueue({
+                    type: "tool-input-delta",
+                    id: toolCallId,
+                    delta: toolCall.function.arguments,
+                  });
                 }
               }
             }
 
-            // Handle text content
             if (choice.delta?.content) {
+              const textId = `text-${Date.now()}`;
+              controller.enqueue({
+                type: "text-start",
+                id: textId,
+              });
               controller.enqueue({
                 type: "text-delta",
-                textDelta: choice.delta.content,
+                id: textId,
+                delta: choice.delta.content,
+              });
+              controller.enqueue({
+                type: "text-end",
+                id: textId,
               });
             }
 
-            // Update finish reason if present
             if (choice.delta?.finish_reason) {
               finishReason = mapAzureFinishReason(choice.delta.finish_reason);
             }
           },
         })
       ),
-      rawCall: { rawPrompt, rawSettings },
-      rawResponse: { headers: response.headers },
-      request: { body: JSON.stringify(body) },
-      warnings,
+      request: { body },
     };
+  }
+
+  get supportedUrls() {
+    return {} as Record<string, RegExp[]>;
   }
 }
