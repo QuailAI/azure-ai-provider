@@ -165,6 +165,10 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
     >();
     let lastToolCallId: string | undefined;
 
+    // State for text accumulation to support reasoning middleware
+    let currentTextId: string | undefined;
+    let hasStartedText = false;
+
     return {
       stream: stream.pipeThrough(
         new TransformStream<{ data: string }, LanguageModelV2StreamPart>({
@@ -173,6 +177,14 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
           },
           transform(chunk, controller) {
             if (chunk.data === "[DONE]") {
+              // Finish any ongoing text
+              if (hasStartedText && currentTextId) {
+                controller.enqueue({
+                  type: "text-end",
+                  id: currentTextId,
+                });
+              }
+
               // Send any remaining tool calls as complete
               for (const toolCall of toolCalls.values()) {
                 if (toolCall.hasStarted) {
@@ -255,19 +267,21 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
             }
 
             if (choice.delta?.content) {
-              const textId = `text-${Date.now()}`;
-              controller.enqueue({
-                type: "text-start",
-                id: textId,
-              });
+              // Start text if not already started
+              if (!hasStartedText) {
+                currentTextId = `text-${Date.now()}`;
+                hasStartedText = true;
+                controller.enqueue({
+                  type: "text-start",
+                  id: currentTextId,
+                });
+              }
+
+              // Emit text delta
               controller.enqueue({
                 type: "text-delta",
-                id: textId,
+                id: currentTextId!,
                 delta: choice.delta.content,
-              });
-              controller.enqueue({
-                type: "text-end",
-                id: textId,
               });
             }
 
