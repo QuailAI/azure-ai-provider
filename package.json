@@ -1,15 +1,15 @@
 {
   "name": "@quail-ai/azure-ai-provider",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "ai sdk compatible provider for azure(non OpenAI models)",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
   "scripts": {
@@ -21,15 +21,15 @@
     "prepublishOnly": "echo 'Skipping tests as they are run in CI'"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^2.0.0",
-    "@ai-sdk/provider-utils": "^3.0.1",
+    "@ai-sdk/provider": "^4.0.3",
+    "@ai-sdk/provider-utils": "^5.0.7",
     "@azure-rest/ai-inference": "^1.0.0-beta.6",
     "@azure/core-sse": "^2.3.0",
-    "zod": "^4.0.17"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",
-    "ai": "^5.0.10",
+    "ai": "^7.0.22",
     "dotenv": "^16.4.5",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",

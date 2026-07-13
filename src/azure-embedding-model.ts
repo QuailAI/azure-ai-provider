@@ -1,4 +1,8 @@
-import { EmbeddingModelV2 } from "@ai-sdk/provider";
+import {
+  EmbeddingModelV4,
+  EmbeddingModelV4CallOptions,
+  EmbeddingModelV4Result,
+} from "@ai-sdk/provider";
 import {
   AzureEmbeddingModelId,
   AzureEmbeddingSettings,
@@ -10,8 +14,8 @@ type AzureEmbeddingConfig = {
   headers: () => Record<string, string | undefined>;
 };
 
-export class AzureEmbeddingModel implements EmbeddingModelV2<string> {
-  readonly specificationVersion = "v2" as const;
+export class AzureEmbeddingModel implements EmbeddingModelV4 {
+  readonly specificationVersion = "v4" as const;
   readonly maxEmbeddingsPerCall: number | undefined;
   readonly supportsParallelCalls = true;
 
@@ -35,38 +39,44 @@ export class AzureEmbeddingModel implements EmbeddingModelV2<string> {
     return this.config.provider;
   }
 
-  async doEmbed({ values, abortSignal, headers }: any) {
-    const response = await fetch(
-      `${this.config.baseURL}/deployments/${this.modelId}/embeddings`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.config.headers(),
-          ...headers,
-        },
-        body: JSON.stringify({
-          input: values,
-        }),
-        signal: abortSignal,
-      }
-    );
+  async doEmbed({
+    values,
+    abortSignal,
+    headers,
+  }: EmbeddingModelV4CallOptions): Promise<EmbeddingModelV4Result> {
+    const response = await fetch(`${this.config.baseURL}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...this.config.headers(),
+        ...headers,
+      },
+      body: JSON.stringify({
+        input: values,
+        model: this.modelId,
+      }),
+      signal: abortSignal,
+    });
 
     if (!response.ok) {
       throw new Error(`Failed to get embeddings: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as {
+      data: Array<{ embedding: number[] }>;
+      usage?: { total_tokens?: number };
+    };
     return {
-      embeddings: data.data.map(
-        (item: { embedding: number[] }) => item.embedding
-      ),
-      usage: {
-        tokens: data.usage?.total_tokens,
-      },
-      rawResponse: {
+      embeddings: data.data.map((item) => item.embedding),
+      usage:
+        data.usage?.total_tokens == null
+          ? undefined
+          : { tokens: data.usage.total_tokens },
+      response: {
         headers: Object.fromEntries(response.headers.entries()),
+        body: data,
       },
-    } as any;
+      warnings: [],
+    };
   }
 }

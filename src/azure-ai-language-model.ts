@@ -1,14 +1,16 @@
 import {
-  LanguageModelV2,
-  LanguageModelV2CallOptions,
-  LanguageModelV2CallWarning,
-  LanguageModelV2StreamPart,
-  LanguageModelV2Content,
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4StreamPart,
+  LanguageModelV4Content,
+  LanguageModelV4Usage,
+  SharedV4Warning,
+  APICallError,
 } from "@ai-sdk/provider";
 import { AzureChatModelId, AzureChatSettings } from "./azure-ai-settings";
 import { mapAzureFinishReason } from "./map-azure-finish-reason";
 import { convertToAzureChatMessages } from "./convert-to-azure-messages";
-import { prepareToolsV2 as prepareTools } from "./azure-prepare-tools";
+import { prepareTools } from "./azure-prepare-tools";
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 import { createSseStream } from "@azure/core-sse";
@@ -19,8 +21,15 @@ type AzureChatConfig = {
   headers: () => Record<string, string | undefined>;
 };
 
-export class AzureChatLanguageModel implements LanguageModelV2 {
-  readonly specificationVersion = "v2" as const;
+function normalizeCallHeaders(headers: Record<string, string | undefined> | undefined) {
+  if (!headers) return undefined;
+  return Object.fromEntries(
+    Object.entries(headers).filter((entry): entry is [string, string] => entry[1] != null)
+  );
+}
+
+export class AzureChatLanguageModel implements LanguageModelV4 {
+  readonly specificationVersion = "v4" as const;
 
   readonly modelId: AzureChatModelId;
   readonly settings: AzureChatSettings;
@@ -56,8 +65,22 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
     stopSequences,
     tools,
     toolChoice,
-  }: LanguageModelV2CallOptions) {
-    const warnings: LanguageModelV2CallWarning[] = [];
+    topP,
+    topK,
+    presencePenalty,
+    frequencyPenalty,
+    responseFormat,
+    seed,
+  }: LanguageModelV4CallOptions) {
+    const warnings: SharedV4Warning[] = [];
+
+    for (const [setting, value] of Object.entries({
+      topK,
+    })) {
+      if (value !== undefined) {
+        warnings.push({ type: "unsupported", feature: setting });
+      }
+    }
 
     const messages = convertToAzureChatMessages(prompt);
 
@@ -67,6 +90,23 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
       temperature,
       max_tokens: maxOutputTokens,
       stop: stopSequences,
+      top_p: topP,
+      presence_penalty: presencePenalty,
+      frequency_penalty: frequencyPenalty,
+      seed,
+      response_format:
+        responseFormat?.type === "json"
+          ? responseFormat.schema
+            ? {
+                type: "json_schema" as const,
+                json_schema: {
+                  name: responseFormat.name ?? "response",
+                  description: responseFormat.description,
+                  schema: responseFormat.schema,
+                },
+              }
+            : { type: "json_object" as const }
+          : undefined,
     };
 
     const {
@@ -86,19 +126,32 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
     };
   }
 
-  async doGenerate(options: LanguageModelV2CallOptions) {
+  async doGenerate(options: LanguageModelV4CallOptions) {
     const { args, warnings } = this.getArgs(options);
 
     const response = await this.client.path("/chat/completions").post({
       body: args,
+      abortSignal: options.abortSignal,
+      headers: normalizeCallHeaders(options.headers),
     });
 
     if (isUnexpected(response)) {
-      throw response.body.error;
+      throw new APICallError({
+        message: response.body.error.message,
+        url: response.request.url,
+        requestBodyValues: args,
+        statusCode: Number(response.status),
+        responseHeaders: response.headers,
+        responseBody: JSON.stringify(response.body),
+        data: response.body.error,
+      });
     }
 
     const choice = response.body.choices[0];
-    const content: LanguageModelV2Content[] = [];
+    if (!choice) {
+      throw new Error("Azure AI response did not contain a completion choice");
+    }
+    const content: LanguageModelV4Content[] = [];
     if (choice.message.content) {
       content.push({ type: "text", text: choice.message.content });
     }
@@ -117,17 +170,34 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
       content,
       finishReason: mapAzureFinishReason(choice.finish_reason ?? "unknown"),
       usage: {
-        inputTokens: response.body.usage?.prompt_tokens,
-        outputTokens: response.body.usage?.completion_tokens,
-        totalTokens: response.body.usage?.total_tokens,
+        inputTokens: {
+          total: response.body.usage?.prompt_tokens,
+          noCache: undefined,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+        },
+        outputTokens: {
+          total: response.body.usage?.completion_tokens,
+          text: undefined,
+          reasoning: undefined,
+        },
       },
       request: { body: args },
-      response: { body: response.body },
+      response: {
+        id: response.body.id,
+        timestamp:
+          response.body.created == null
+            ? undefined
+            : new Date(response.body.created * 1000),
+        modelId: response.body.model,
+        headers: response.headers,
+        body: response.body,
+      },
       warnings,
     };
   }
 
-  async doStream(options: LanguageModelV2CallOptions) {
+  async doStream(options: LanguageModelV4CallOptions) {
     const { args, warnings } = this.getArgs(options);
     const body = { ...args, stream: true };
 
@@ -135,6 +205,8 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
       .path("/chat/completions")
       .post({
         body,
+        abortSignal: options.abortSignal,
+        headers: normalizeCallHeaders(options.headers),
       })
       .asNodeStream();
 
@@ -143,15 +215,19 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
     }
 
     const stream = createSseStream(response.body);
-    let finishReason: ReturnType<typeof mapAzureFinishReason> = "unknown";
-    let usage: {
-      inputTokens: number | undefined;
-      outputTokens: number | undefined;
-      totalTokens: number | undefined;
-    } = {
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: undefined,
+    let finishReason = mapAzureFinishReason(undefined);
+    let usage: LanguageModelV4Usage = {
+      inputTokens: {
+        total: undefined,
+        noCache: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+      },
+      outputTokens: {
+        total: undefined,
+        text: undefined,
+        reasoning: undefined,
+      },
     };
 
     const toolCalls = new Map<
@@ -163,6 +239,7 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
         hasStarted: boolean;
       }
     >();
+    const toolCallIdsByIndex = new Map<number, string>();
     let lastToolCallId: string | undefined;
 
     // State for text accumulation to support reasoning middleware
@@ -171,7 +248,7 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
 
     return {
       stream: stream.pipeThrough(
-        new TransformStream<{ data: string }, LanguageModelV2StreamPart>({
+        new TransformStream<{ data: string }, LanguageModelV4StreamPart>({
           start(controller) {
             controller.enqueue({ type: "stream-start", warnings });
           },
@@ -214,9 +291,17 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
 
             if (data.usage) {
               usage = {
-                inputTokens: data.usage.prompt_tokens,
-                outputTokens: data.usage.completion_tokens,
-                totalTokens: data.usage.total_tokens,
+                inputTokens: {
+                  total: data.usage.prompt_tokens,
+                  noCache: undefined,
+                  cacheRead: undefined,
+                  cacheWrite: undefined,
+                },
+                outputTokens: {
+                  total: data.usage.completion_tokens,
+                  text: undefined,
+                  reasoning: undefined,
+                },
               };
             }
 
@@ -226,8 +311,18 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
             if (choice.delta?.tool_calls) {
               for (const toolCall of choice.delta.tool_calls) {
                 const incomingId = toolCall.id;
-                if (incomingId) lastToolCallId = incomingId;
-                let toolCallId = incomingId ?? lastToolCallId;
+                if (incomingId) {
+                  lastToolCallId = incomingId;
+                  if (toolCall.index != null) {
+                    toolCallIdsByIndex.set(toolCall.index, incomingId);
+                  }
+                }
+                let toolCallId =
+                  incomingId ??
+                  (toolCall.index == null
+                    ? undefined
+                    : toolCallIdsByIndex.get(toolCall.index)) ??
+                  lastToolCallId;
                 if (!toolCallId) {
                   toolCallId = `tool-${toolCalls.size + 1}`;
                 }
@@ -235,7 +330,7 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
                 if (!toolCalls.has(toolCallId)) {
                   toolCalls.set(toolCallId, {
                     name: toolCall.function?.name || "",
-                    input: toolCall.function?.arguments || "",
+                    input: "",
                     id: toolCallId,
                     hasStarted: false,
                   });
@@ -285,13 +380,16 @@ export class AzureChatLanguageModel implements LanguageModelV2 {
               });
             }
 
-            if (choice.delta?.finish_reason) {
-              finishReason = mapAzureFinishReason(choice.delta.finish_reason);
+            const rawFinishReason =
+              choice.finish_reason ?? choice.delta?.finish_reason;
+            if (rawFinishReason) {
+              finishReason = mapAzureFinishReason(rawFinishReason);
             }
           },
         })
       ),
       request: { body },
+      response: { headers: response.headers },
     };
   }
 

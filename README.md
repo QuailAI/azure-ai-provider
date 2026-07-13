@@ -59,7 +59,7 @@ const stream = await streamText({
   prompt: "Generate a long story...",
 });
 
-for await (const chunk of stream) {
+for await (const chunk of stream.textStream) {
   process.stdout.write(chunk);
 }
 ```
@@ -76,7 +76,7 @@ const result = await generateText({
   tools: {
     get_weather: {
       description: "Get weather for location",
-      parameters: z.object({
+      inputSchema: z.object({
         location: z.string(),
       }),
       execute: async ({ location }) => {
@@ -90,7 +90,7 @@ const result = await generateText({
 ### Text Embeddings
 
 ```ts
-const model = azure.textEmbeddingModel("your-embedding-deployment");
+const model = azure.embeddingModel("your-embedding-deployment");
 
 const result = await model.doEmbed({
   values: ["Encode this text"],
@@ -159,7 +159,7 @@ try {
 
 ```ts
 import { createAzure } from "@quail-ai/azure-ai-provider";
-import { CoreMessage, generateText, smoothStream, streamText, tool } from "ai";
+import { ModelMessage, generateText, smoothStream, streamText, tool } from "ai";
 import { z } from "zod";
 import dotenv from "dotenv";
 import * as readline from "node:readline/promises";
@@ -171,7 +171,7 @@ const terminal = readline.createInterface({
   output: process.stdout,
 });
 
-const messages: CoreMessage[] = [];
+const messages: ModelMessage[] = [];
 
 const azure = createAzure({
   endpoint: process.env.AZURE_API_ENDPOINT,
@@ -186,9 +186,9 @@ async function streaming() {
     const result = streamText({
       model: azure("DeepSeek-R1"),
       messages,
-      experimental_transform: smoothStream({ chunking: "word" }),
+      transform: smoothStream({ chunking: "word" }),
       temperature: 0,
-      maxTokens: 400,
+      maxOutputTokens: 400,
       system:
         "You are an assistant that can answer questions and perform tasks",
     });
@@ -217,7 +217,7 @@ async function blocking() {
         get_weather: tool({
           description:
             "Get the current weather in a given location (in Celsius)",
-          parameters: z.object({
+          inputSchema: z.object({
             location: z.string().describe("The city to get the weather for"),
           }),
           execute: async ({ location }) =>
@@ -225,7 +225,7 @@ async function blocking() {
         }),
       },
       temperature: 0,
-      maxTokens: 400,
+      maxOutputTokens: 400,
       system:
         "You are an assistant that can answer questions and perform tasks.",
     });

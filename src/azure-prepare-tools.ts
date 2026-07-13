@@ -1,19 +1,13 @@
 import {
-  LanguageModelV2CallWarning,
-  LanguageModelV2FunctionTool,
-  LanguageModelV2ProviderDefinedTool,
+  LanguageModelV4FunctionTool,
+  LanguageModelV4ProviderTool,
+  SharedV4Warning,
 } from "@ai-sdk/provider";
 import { ChatCompletionsToolDefinition } from "@azure-rest/ai-inference";
 
-type ToolChoiceV2 =
-  | "auto"
-  | "none"
-  | "required"
-  | { type: "tool"; toolName: string };
-
-export function prepareToolsV2(
+export function prepareTools(
   toolsInput:
-    | Array<LanguageModelV2FunctionTool | LanguageModelV2ProviderDefinedTool>
+    | Array<LanguageModelV4FunctionTool | LanguageModelV4ProviderTool>
     | undefined,
   toolChoice:
     | { type: "auto" }
@@ -24,9 +18,9 @@ export function prepareToolsV2(
 ): {
   tools: ChatCompletionsToolDefinition[] | undefined;
   tool_choice?: string | { type: "function"; function: { name: string } };
-  toolWarnings: LanguageModelV2CallWarning[];
+  toolWarnings: SharedV4Warning[];
 } {
-  const toolWarnings: LanguageModelV2CallWarning[] = [];
+  const toolWarnings: SharedV4Warning[] = [];
 
   const tools = toolsInput?.length ? toolsInput : undefined;
   if (!tools) {
@@ -36,10 +30,13 @@ export function prepareToolsV2(
   const azureTools: ChatCompletionsToolDefinition[] = [];
   for (const tool of tools) {
     if (tool.type !== "function") {
-      toolWarnings.push({ type: "unsupported-tool", tool });
+      toolWarnings.push({
+        type: "unsupported",
+        feature: `provider-defined tool ${tool.name}`,
+      });
       continue;
     }
-    const fn = tool as LanguageModelV2FunctionTool;
+    const fn = tool as LanguageModelV4FunctionTool;
     azureTools.push({
       type: "function",
       function: {
@@ -57,21 +54,9 @@ export function prepareToolsV2(
   if (toolChoice?.type === "auto") {
     tool_choice = "auto";
   } else if (toolChoice?.type === "required") {
-    toolWarnings.push({
-      type: "unsupported-setting",
-      setting: "toolChoice",
-      details: "required toolChoice not supported",
-    });
-    tool_choice = "auto";
+    tool_choice = "required";
   } else if (toolChoice?.type === "none") {
-    if (azureTools.length > 0) {
-      toolWarnings.push({
-        type: "unsupported-setting",
-        setting: "toolChoice",
-        details: "none toolChoice not supported when tools are provided",
-      });
-    }
-    // Prefer to omit tools downstream if none.
+    tool_choice = "none";
   } else if (toolChoice?.type === "tool") {
     tool_choice = {
       type: "function",
@@ -85,6 +70,3 @@ export function prepareToolsV2(
     toolWarnings,
   };
 }
-
-// Temporary alias to keep existing imports compiling during migration.
-export const prepareTools = prepareToolsV2;

@@ -1,10 +1,10 @@
 import {
-  LanguageModelV2Prompt,
+  LanguageModelV4Prompt,
   UnsupportedFunctionalityError,
-  LanguageModelV2TextPart,
-  LanguageModelV2FilePart,
-  LanguageModelV2ToolCallPart,
-  LanguageModelV2ToolResultPart,
+  LanguageModelV4TextPart,
+  LanguageModelV4FilePart,
+  LanguageModelV4ToolCallPart,
+  LanguageModelV4ToolResultPart,
 } from "@ai-sdk/provider";
 import {
   ChatRequestMessage,
@@ -12,7 +12,7 @@ import {
 } from "@azure-rest/ai-inference";
 
 export function convertToAzureChatMessages(
-  prompt: LanguageModelV2Prompt
+  prompt: LanguageModelV4Prompt
 ): ChatRequestMessage[] {
   const messages: ChatRequestMessage[] = [];
   for (const message of prompt) {
@@ -23,7 +23,7 @@ export function convertToAzureChatMessages(
       if (message.content.length === 1 && message.content[0].type === "text") {
         messages.push({
           role: message.role,
-          content: (message.content[0] as LanguageModelV2TextPart).text,
+          content: (message.content[0] as LanguageModelV4TextPart).text,
         });
         continue;
       }
@@ -33,17 +33,18 @@ export function convertToAzureChatMessages(
           case "text": {
             return {
               type: "text",
-              text: (part as LanguageModelV2TextPart).text,
+              text: (part as LanguageModelV4TextPart).text,
             } as ChatMessageContentItem;
           }
           case "file": {
-            const filePart = part as LanguageModelV2FilePart;
+            const filePart = part as LanguageModelV4FilePart;
+            const fileData = filePart.data;
 
-            if (filePart.data instanceof URL) {
+            if (fileData.type === "url") {
               if (filePart.mediaType.startsWith("image/")) {
                 return {
                   type: "image_url",
-                  image_url: { url: filePart.data.toString(), detail: "auto" },
+                  image_url: { url: fileData.url.toString(), detail: "auto" },
                 } as ChatMessageContentItem;
               }
               throw new UnsupportedFunctionalityError({
@@ -51,12 +52,13 @@ export function convertToAzureChatMessages(
               });
             }
 
-            const asBase64 = (data: string | Uint8Array | URL) => {
-              if (data instanceof URL) {
-                throw new UnsupportedFunctionalityError({
-                  functionality: "URL data in file parts",
-                });
-              }
+            if (fileData.type !== "data") {
+              throw new UnsupportedFunctionalityError({
+                functionality: `${fileData.type} data in file parts`,
+              });
+            }
+
+            const asBase64 = (data: string | Uint8Array) => {
               return typeof data === "string"
                 ? data
                 : Buffer.from(data).toString("base64");
@@ -66,13 +68,13 @@ export function convertToAzureChatMessages(
               case "audio/wav":
                 return {
                   type: "input_audio",
-                  input_audio: { data: asBase64(filePart.data), format: "wav" },
+                  input_audio: { data: asBase64(fileData.data), format: "wav" },
                 } as ChatMessageContentItem;
               case "audio/mp3":
               case "audio/mpeg":
                 return {
                   type: "input_audio",
-                  input_audio: { data: asBase64(filePart.data), format: "mp3" },
+                  input_audio: { data: asBase64(fileData.data), format: "mp3" },
                 } as ChatMessageContentItem;
               case "application/pdf": {
                 const partName = `part-${index}.pdf`;
@@ -81,14 +83,14 @@ export function convertToAzureChatMessages(
                   file: {
                     filename: partName,
                     file_data: `data:application/pdf;base64,${asBase64(
-                      filePart.data
+                      fileData.data
                     )}`,
                   },
                 } as ChatMessageContentItem;
               }
               default: {
                 if (filePart.mediaType.startsWith("image/")) {
-                  const base64 = asBase64(filePart.data);
+                  const base64 = asBase64(fileData.data);
                   return {
                     type: "image_url",
                     image_url: {
@@ -124,9 +126,9 @@ export function convertToAzureChatMessages(
 
       for (const part of message.content) {
         if (part.type === "text") {
-          assistantText += (part as LanguageModelV2TextPart).text;
+          assistantText += (part as LanguageModelV4TextPart).text;
         } else if (part.type === "tool-call") {
-          const p = part as LanguageModelV2ToolCallPart;
+          const p = part as LanguageModelV4ToolCallPart;
           const argsString =
             typeof p.input === "string"
               ? p.input
@@ -148,7 +150,7 @@ export function convertToAzureChatMessages(
     } else if (message.role === "tool") {
       // Emit one Azure tool message per tool-result
       for (const result of message.content) {
-        const toolResult = result as LanguageModelV2ToolResultPart;
+        const toolResult = result as LanguageModelV4ToolResultPart;
         let content: string;
 
         if (toolResult.output.type === "text") {
@@ -159,6 +161,8 @@ export function convertToAzureChatMessages(
           content = toolResult.output.value;
         } else if (toolResult.output.type === "error-json") {
           content = JSON.stringify(toolResult.output.value);
+        } else if (toolResult.output.type === "execution-denied") {
+          content = toolResult.output.reason ?? "Tool execution denied";
         } else if (toolResult.output.type === "content") {
           content = toolResult.output.value
             .map((c) => (c.type === "text" ? c.text : "[media omitted]"))

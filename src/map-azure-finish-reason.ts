@@ -1,26 +1,29 @@
+import type { LanguageModelV4FinishReason } from "@ai-sdk/provider";
+
 export function mapAzureFinishReason(
   finishReason: string | null | undefined
-):
-  | "stop"
-  | "length"
-  | "tool-calls"
-  | "content-filter"
-  | "error"
-  | "other"
-  | "unknown" {
+): LanguageModelV4FinishReason {
+  let unified: LanguageModelV4FinishReason["unified"];
   switch (finishReason) {
     case "stop":
-      return "stop";
+      unified = "stop";
+      break;
     case "length":
     case "model_length":
-      return "length";
+      unified = "length";
+      break;
     case "tool_calls":
-      return "tool-calls";
+      unified = "tool-calls";
+      break;
     case "content_filter":
-      return "content-filter";
+      unified = "content-filter";
+      break;
     case "error":
-      return "error";
+      unified = "error";
+      break;
     default:
-      return "unknown";
+      unified = "other";
   }
+
+  return { unified, raw: finishReason ?? undefined };
 }

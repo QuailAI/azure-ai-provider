@@ -1,7 +1,7 @@
 import {
-  EmbeddingModelV2,
-  LanguageModelV2,
-  ProviderV2,
+  EmbeddingModelV4,
+  LanguageModelV4,
+  ProviderV4,
 } from "@ai-sdk/provider";
 import { loadApiKey, withoutTrailingSlash } from "@ai-sdk/provider-utils";
 import { AzureChatLanguageModel } from "./azure-ai-language-model";
@@ -12,8 +12,8 @@ import {
   AzureEmbeddingSettings,
 } from "./azure-embedding-settings";
 
-export interface AzureProvider extends ProviderV2 {
-  (modelId: AzureChatModelId, settings?: AzureChatSettings): LanguageModelV2;
+export interface AzureProvider extends ProviderV4 {
+  (modelId: AzureChatModelId, settings?: AzureChatSettings): LanguageModelV4;
 
   /**
    * Creates a model for text generation.
@@ -21,7 +21,7 @@ export interface AzureProvider extends ProviderV2 {
   languageModel(
     modelId: AzureChatModelId,
     settings?: AzureChatSettings
-  ): LanguageModelV2;
+  ): LanguageModelV4;
 
   /**
    * Creates a model for text generation.
@@ -29,28 +29,33 @@ export interface AzureProvider extends ProviderV2 {
   chat(
     modelId: AzureChatModelId,
     settings?: AzureChatSettings
-  ): LanguageModelV2;
+  ): LanguageModelV4;
 
   /**
-   * @deprecated Use `textEmbeddingModel()` instead.
+   * @deprecated Use `embeddingModel()` instead.
    */
   embedding(
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ): EmbeddingModelV2<string>;
+  ): EmbeddingModelV4;
 
   /**
-   * @deprecated Use `textEmbeddingModel()` instead.
+   * @deprecated Use `embeddingModel()` instead.
    */
   textEmbedding(
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ): EmbeddingModelV2<string>;
+  ): EmbeddingModelV4;
+
+  embeddingModel(
+    modelId: AzureEmbeddingModelId,
+    settings?: AzureEmbeddingSettings
+  ): EmbeddingModelV4;
 
   textEmbeddingModel: (
     modelId: AzureEmbeddingModelId,
     settings?: AzureEmbeddingSettings
-  ) => EmbeddingModelV2<string>;
+  ) => EmbeddingModelV4;
 }
 
 export interface AzureProviderSettings {
@@ -127,13 +132,15 @@ export function createAzure(
   };
 
   provider.languageModel = createChatModel;
+  provider.specificationVersion = "v4" as const;
   provider.chat = createChatModel;
   provider.embedding = createEmbeddingModel;
+  provider.embeddingModel = createEmbeddingModel;
   provider.textEmbedding = createEmbeddingModel;
   provider.textEmbeddingModel = createEmbeddingModel;
   provider.imageModel = function imageModel() {
     throw new Error("Image model is not implemented for Azure provider.");
-  } as AzureProvider["imageModel"]; // satisfy ProviderV2 interface
+  } as AzureProvider["imageModel"];
 
   return provider;
 }
